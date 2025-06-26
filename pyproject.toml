@@ -1,0 +1,19 @@
+[project]
+name = "rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [{ name = "Tucker6742", email = "npgiabao91003@gmail.com" }]
+requires-python = ">=3.13"
+dependencies = [
+    "beautifulsoup4>=4.13.4",
+    "chromadb>=1.0.13",
+    "fastapi[standard]>=0.115.13",
+    "google-genai>=1.21.1",
+    "markdownify>=1.1.0",
+    "python-dotenv>=1.1.1",
+    "pyyaml>=6.0.2",
+    "requests>=2.32.4",
+    "tqdm>=4.67.1",
+    "uvicorn[standard]>=0.34.3",
+]

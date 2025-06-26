@@ -1,0 +1,22 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Environment files
+.env
+
+# Test
+test_nb
+
+#VSCode
+.vscode/
+
+#DB
+chroma_db
