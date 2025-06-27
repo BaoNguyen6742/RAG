@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
-import httpx  # The async-compatible requests library
+import httpx
 from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 
@@ -12,7 +12,25 @@ import yaml
 
 
 def url_to_filename(url):
-    """Converts a URL into a safe filename string."""
+    """
+    Converts a URL to a valid filename for saving Markdown content.
+
+    Behavior
+    --------
+    - Converts the URL path to a filename, replacing slashes with underscores.
+    - Removes any characters that are not alphanumeric, underscores, hyphens, or periods.
+    - Ensures the filename ends with `.md`.
+
+    Parameters
+    ----------
+    - url : `str`
+        The URL to convert.
+
+    Returns
+    -------
+    - filename : `str`
+        The converted filename.
+    """
     parsed_url = urlparse(url)
     path_str = parsed_url.path.lstrip("/")
     if not path_str:
@@ -25,21 +43,39 @@ def url_to_filename(url):
     return filename
 
 
-async def process_page(session, url, domain_dir, visited_urls):
+async def process_page(
+    session: httpx.AsyncClient, url: str, domain_dir: Path, visited_urls: set
+) -> list[str]:
     """
-    Fetches a single page, saves it, and finds new links.
-    Returns a list of newly discovered links.
+    Process a single page, extract its main content, and save it as Markdown.
+
+    Behavior
+    --------
+    This function fetches the content of a given URL, extracts the main content,
+    converts it to Markdown, and saves it to a file. It also collects new links.
+
+    Parameters
+    ----------
+    - session : `httpx.AsyncClient`
+        The HTTP session to use for requests.
+    - url : `str`
+        The URL of the page to process.
+    - domain_dir : `Path`
+        The directory to save the Markdown files.
+    - visited_urls : `set`
+        A set of URLs that have already been visited.
+
+    Returns
+    -------
+    - new_links: `list[str]`
+        A list of newly discovered links.
     """
-    # The check for visited URLs is now the single source of truth.
     if url in visited_urls:
         return []
 
     try:
-        # The 'follow_redirects=True' is important.
         response = await session.get(url, timeout=10, follow_redirects=True)
 
-        # Mark both the original URL and the final URL (after redirects) as visited.
-        # This is done *after* a successful request.
         visited_urls.add(url)
         final_url = str(response.url)
         visited_urls.add(final_url)
@@ -47,7 +83,6 @@ async def process_page(session, url, domain_dir, visited_urls):
         response.raise_for_status()
         print(f"  -> Processing: {final_url} (Status: {response.status_code})")
 
-        # --- Save content to Markdown ---
         soup = BeautifulSoup(response.text, "html.parser")
         main_content = (
             soup.find("div", role="main") or soup.find("main") or soup.find("article")
@@ -59,12 +94,11 @@ async def process_page(session, url, domain_dir, visited_urls):
         else:
             print(f"    -> Warning: Main content not found for {final_url}")
 
-        # --- Find and return new links ---
         new_links = []
         base_domain = urlparse(final_url).netloc
         for a_tag in soup.find_all("a", href=True):
             link = a_tag["href"]  # type: ignore
-            absolute_link = urljoin(final_url, link) # type: ignore
+            absolute_link = urljoin(final_url, link)  # type: ignore
             link_domain = urlparse(absolute_link).netloc
 
             if (
@@ -83,8 +117,40 @@ async def process_page(session, url, domain_dir, visited_urls):
         return []
 
 
-async def worker(name, queue, session, domain_dir, visited_urls, semaphore, max_depth):
-    """A worker task that pulls URLs from the queue and processes them."""
+async def worker(
+    name,
+    queue: asyncio.Queue,
+    session: httpx.AsyncClient,
+    domain_dir: Path,
+    visited_urls: set,
+    semaphore: asyncio.Semaphore,
+    max_depth: int,
+):
+    """
+    Worker function that processes URLs from the queue.
+
+    Behavior
+    --------
+    This function continuously pulls URLs from the queue and processes them using the provided
+    HTTP session. It respects the maximum depth and uses a semaphore to limit concurrency.
+
+    Parameters
+    ----------
+    - name : `str`
+        The name of the worker.
+    - queue : `asyncio.Queue`
+        The queue of URLs to process.
+    - session : `httpx.AsyncClient`
+        The HTTP session to use for requests.
+    - domain_dir : `Path`
+        The directory to save the Markdown files.
+    - visited_urls : `set`
+        A set of URLs that have already been visited.
+    - semaphore : `asyncio.Semaphore`
+        A semaphore to limit concurrency.
+    - max_depth : `int`
+        The maximum depth to crawl.
+    """
     while True:
         current_url, current_depth = await queue.get()
 
@@ -92,28 +158,45 @@ async def worker(name, queue, session, domain_dir, visited_urls, semaphore, max_
             queue.task_done()
             continue
 
-        async with semaphore:  # Acquire the semaphore before processing
+        async with semaphore:
             newly_found_links = await process_page(
                 session, current_url, domain_dir, visited_urls
             )
 
             if current_depth < max_depth:
                 for link in newly_found_links:
-                    # Now we can simply check if the link is in the global visited set.
-                    # If not, add it to the queue for a future worker to process.
                     if link not in visited_urls:
                         await queue.put((link, current_depth + 1))
 
         queue.task_done()
 
 
-async def crawl_site_async(seed_url, output_dir: Path, max_depth=2, concurrency=20):
+async def crawl_site_async(
+    seed_url: str, output_dir: Path, max_depth=2, concurrency=20
+):
     """
-    Sets up and runs the asynchronous crawl for a single website.
+    Crawl a website asynchronously and save its content as Markdown files.
+
+    Behavior
+    --------
+    This function initiates the crawling process for a single website, starting from the seed URL.
+    It manages the asynchronous tasks and ensures that the crawling adheres to the specified depth
+    and concurrency limits.
+
+    Parameters
+    ----------
+    - seed_url : `str`
+        The starting URL for the crawl.
+    - output_dir : `Path`
+        The directory where the Markdown files will be saved.
+    - max_depth : `int`. Optional, by default 2
+        The maximum depth to crawl.
+    - concurrency : `int`. Optional, by default 20
+        The maximum number of concurrent requests.
     """
     queue = asyncio.Queue()
     semaphore = asyncio.Semaphore(concurrency)
-    visited_urls = set()  # This set is now only written to from within process_page
+    visited_urls = set()
 
     base_domain = urlparse(seed_url).netloc
     domain_dir = output_dir / base_domain.replace(".", "_")
@@ -123,8 +206,6 @@ async def crawl_site_async(seed_url, output_dir: Path, max_depth=2, concurrency=
         f"[*] Starting async crawl on: {base_domain} with concurrency: {concurrency}, depth: {max_depth}"
     )
 
-    # --- THE CRITICAL FIX ---
-    # Only put the seed_url in the queue. DO NOT add it to visited_urls here.
     await queue.put((seed_url, 0))
 
     async with httpx.AsyncClient() as session:
@@ -143,7 +224,7 @@ async def crawl_site_async(seed_url, output_dir: Path, max_depth=2, concurrency=
             for i in range(concurrency)
         ]
 
-        await queue.join()  # Wait for all tasks in the queue to be processed
+        await queue.join()
 
         for w in workers:
             w.cancel()
@@ -152,24 +233,21 @@ async def crawl_site_async(seed_url, output_dir: Path, max_depth=2, concurrency=
 
     print(f"\n[*] Crawl finished for {base_domain}.")
     print(f"[*] Found and processed {len(visited_urls)} unique pages.")
-    
+
 
 async def main():
-    """The main entry point for the async script."""
-    
     with open(Path(__file__).parent / "input/links.yaml") as file:
         urls = yaml.safe_load(file)
     URLS_TO_CRAWL = []
     for web in urls.keys():
         URLS_TO_CRAWL += urls[web]["main_url"]
-        
+
     MAIN_OUTPUT_DIR = Path(__file__).parent / "output"
     MAX_DEPTH = 1
     CONCURRENCY_LIMIT = 25  # Number of parallel requests
 
     start_time = time.time()
 
-    # Create and run crawl tasks for all sites concurrently
     crawl_tasks = [
         crawl_site_async(
             url, MAIN_OUTPUT_DIR, max_depth=MAX_DEPTH, concurrency=CONCURRENCY_LIMIT
@@ -183,6 +261,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    # This is how you run the main async function
     asyncio.run(main())
-

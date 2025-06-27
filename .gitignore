@@ -20,3 +20,7 @@ test_nb
 
 #DB
 chroma_db
+
+# Output markdown files
+src/rag/data/output/**
+!.gitkeep
